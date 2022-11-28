@@ -37,8 +37,18 @@ if TYPE_CHECKING:
         from sentence_transformers import SentenceTransformer
     except:
         SentenceTransformer = Any
+    # try:
+    #     from dirty_cat import (
+    #         SuperVectorizer,
+    #         GapEncoder,
+    #         SimilarityEncoder,
+    #     )
+    # except:
+    #     SuperVectorizer = Any
+    #     GapEncoder = Any
+    #     SimilarityEncoder = Any 
     try:
-        from dirty_cat import (
+        from cuCat import (
             SuperVectorizer,
             GapEncoder,
             SimilarityEncoder,
@@ -90,7 +100,21 @@ def lazy_import_has_min_dependancy():
         return True, 'ok'
     except ModuleNotFoundError as e:
         return False, e
-
+    
+def lazy_import_has_cuml_dependancy():
+    import warnings
+    warnings.filterwarnings("ignore")
+    try:
+        import scipy.sparse  # noqa
+        from scipy import __version__ as scipy_version
+        from cuCat import __version__ as cuCat_version
+        from sklearn import __version__ as sklearn_version
+        logger.debug(f"SCIPY VERSION: {scipy_version}")
+        logger.debug(f"cuCat VERSION: {cuCat_version}")
+        logger.debug(f"sklearn VERSION: {sklearn_version}")
+        return True, 'ok'
+    except ModuleNotFoundError as e:
+        return False, e
 
 def assert_imported_text():
     has_dependancy_text_, import_text_exn, _ = lazy_import_has_dependancy_text()
@@ -110,6 +134,15 @@ def assert_imported():
                      "`pip install graphistry[ai]`"  # noqa
         )
         raise import_min_exn
+        
+def assert_cuml_imported():
+    has_cuml_dependancy_, import_cuml_exn = lazy_import_has_cuml_dependancy()
+    if not has_cuml_dependancy_:
+        logger.error(  # noqa
+                     "cunl not found, trying running"  # noqa
+                     "`pip install rapids`"  # noqa
+        )
+        raise import_cuml_exn
 
 
 # ############################################################################
@@ -135,7 +168,7 @@ def assert_imported():
 #
 #      _featurize_or_get_edges_dataframe_if_X_is_None
 
-FeatureEngineConcrete = Literal["none", "pandas", "dirty_cat", "torch"]
+FeatureEngineConcrete = Literal["none", "pandas", "dirty_cat", "torch", "cuCat"]
 FeatureEngine = Literal[FeatureEngineConcrete, "auto"]
 
 
@@ -143,13 +176,16 @@ def resolve_feature_engine(
     feature_engine: FeatureEngine,
 ) -> FeatureEngineConcrete:  # noqa
 
-    if feature_engine in ["none", "pandas", "dirty_cat", "torch"]:
+    if feature_engine in ["none", "pandas", "dirty_cat", "torch", "cuCat"]:
         return feature_engine  # type: ignore
 
     if feature_engine == "auto":
         has_dependancy_text_, _, _ = lazy_import_has_dependancy_text()
         if has_dependancy_text_:
             return "torch"
+        has_cuml_dependancy_, _ = lazy_import_has_cuml_dependancy()
+        if has_cuml_dependancy_:
+            return "cuCat"
         has_min_dependancy_, _ = lazy_import_has_min_dependancy()
         if has_min_dependancy_:
             return "dirty_cat"
@@ -157,7 +193,7 @@ def resolve_feature_engine(
 
     raise ValueError(  # noqa
         f'feature_engine expected to be "none", '
-        '"pandas", "dirty_cat", "torch", or "auto"'
+        '"pandas", "dirty_cat", "torch", "cuCat", or "auto"'
         f'but received: {feature_engine} :: {type(feature_engine)}'
     )
 
@@ -863,6 +899,7 @@ def process_dirty_dataframes(
     n_topics_target: int = config.N_TOPICS_TARGET_DEFAULT,
     similarity: Optional[str] = None,  # "ngram",
     categories: Optional[str] = "auto",
+    feature_engine: Optional[str] = "dirty_cat",
     multilabel: bool = False,
 ) -> Tuple[
     pd.DataFrame,
@@ -890,7 +927,11 @@ def process_dirty_dataframes(
     :return: Encoded data matrix and target (if not None),
             the data encoder, and the label encoder.
     """
-    from dirty_cat import SuperVectorizer, GapEncoder, SimilarityEncoder
+    if feature_engine=='dirty_cat':
+        from dirty_cat import SuperVectorizer, GapEncoder, SimilarityEncoder
+    elif feature_engine=='cuCat':
+        from cuCat import SuperVectorizer, GapEncoder, SimilarityEncoder
+        
     from sklearn.preprocessing import FunctionTransformer
     t = time()
 
@@ -1132,7 +1173,8 @@ def process_nodes_dataframes(
         n_topics_target=n_topics_target,
         similarity=similarity,
         categories=categories,
-        multilabel=multilabel
+        multilabel=multilabel,
+        feature_engine=feature_engine
     )
 
     if embedding:
@@ -2338,7 +2380,11 @@ class FeatureMixin(MIXIN_BASE):
                 default True.
         :return: self, with new attributes set by the featurization process.
         """
-        assert_imported()
+        if feature_engine == 'dirty_cat':
+            assert_imported()
+        elif feature_engine == 'cuCat':
+            assert_cuml_imported()
+            
         if inplace:
             res = self
         else:
